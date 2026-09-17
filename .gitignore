@@ -1,0 +1,12 @@
+.env
+__pycache__/
+.pytest_cache/
+.venv/
+airflow/
+data/raw/*
+!data/raw/logistics/
+data/raw/logistics/*
+!data/raw/logistics/.gitkeep
+dbt/target/
+dbt/logs/
+*.json

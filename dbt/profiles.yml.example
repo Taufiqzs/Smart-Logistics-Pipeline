@@ -1,0 +1,11 @@
+smart_logistics:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: service-account
+      project: your-gcp-project
+      dataset: smart_logistics_gold
+      location: asia-southeast2
+      threads: 4
+      keyfile: /path/to/service-account.json

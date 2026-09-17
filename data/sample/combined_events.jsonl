@@ -1,0 +1,3 @@
+{"event_id":"demo-001","event_ts":"2026-09-16T04:00:00Z","city":"Jakarta","weather_severity":"severe","pm25":48,"delay_rate":0.25}
+{"event_id":"demo-002","event_ts":"2026-09-16T04:05:00Z","city":"Bandung","weather_severity":"moderate","pm25":22,"delay_rate":0.10}
+{"event_id":"demo-003","event_ts":"2026-09-16T04:10:00Z","city":"Surabaya","weather_severity":"extreme","pm25":60,"delay_rate":0.40}

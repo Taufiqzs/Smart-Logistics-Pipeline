@@ -1,0 +1,21 @@
+version: 2
+
+models:
+  - name: fact_delivery_performance
+    columns:
+      - name: event_date
+        tests: [not_null]
+      - name: city
+        tests: [not_null]
+      - name: delay_rate
+        tests: [not_null]
+
+  - name: fact_area_risk_daily
+    columns:
+      - name: event_date
+        tests: [not_null]
+      - name: city
+        tests: [not_null]
+      - name: risk_score
+        tests:
+          - not_null

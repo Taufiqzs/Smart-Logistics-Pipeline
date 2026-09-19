@@ -1,3 +1,6 @@
+-- Berkas dbt/models/marts/fact_delivery_performance.sql
+-- Menghasilkan metrik kinerja pengiriman harian berdasarkan kota operasional.
+
 select
   date(event_ts) as event_date,
   city,

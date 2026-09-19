@@ -3,16 +3,25 @@ from datetime import datetime, timedelta, timezone
 from faker import Faker
 from src.common.config import CITIES
 
+# Menyimpan fake yang digunakan pada proses ini.
 fake = Faker("id_ID")
 
+# Menghasilkan data event logistik sintetis untuk kebutuhan pengujian dan simulasi pipeline.
 def generate(rows):
+# Menyimpan start yang digunakan pada proses ini.
     start = datetime.now(timezone.utc) - timedelta(days=30)
+# Menyimpan cities yang digunakan pada proses ini.
     cities = list(CITIES)
     for _ in range(rows):
+# Menyimpan city yang digunakan pada proses ini.
         city = random.choice(cities)
+# Menyimpan `lat`, `lon` yang digunakan pada proses ini.
         lat, lon = CITIES[city]
+# Menyimpan expected yang digunakan pada proses ini.
         expected = random.randint(20, 60)
+# Menyimpan delay yang digunakan pada proses ini.
         delay = max(0, int(random.gauss(8, 10)))
+# Menyimpan actual yang digunakan pada proses ini.
         actual = expected + delay
         yield {
             "event_id": str(uuid.uuid4()),
@@ -31,14 +40,18 @@ def generate(rows):
         }
 
 if __name__ == "__main__":
+# Menyimpan p yang digunakan pada proses ini.
     p = argparse.ArgumentParser()
     p.add_argument("--rows", type=int, default=5000)
     p.add_argument("--output", default="data/raw/logistics/synthetic_orders.csv")
+# Menyimpan args yang digunakan pada proses ini.
     args = p.parse_args()
+# Menyimpan rows yang digunakan pada proses ini.
     rows = list(generate(args.rows))
     import pathlib
     pathlib.Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     with open(args.output, "w", newline="", encoding="utf-8") as f:
+# Menyimpan writer yang digunakan pada proses ini.
         writer = csv.DictWriter(f, fieldnames=rows[0].keys())
         writer.writeheader()
         writer.writerows(rows)

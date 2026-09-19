@@ -1,21 +1,99 @@
+# Berkas: dbt/models/schema.yml
+# Konfigurasi dokumentasi dan pengujian model dbt pada project Smart Logistics.
+# Seluruh deskripsi model dan kolom menggunakan Bahasa Indonesia.
+
 version: 2
 
 models:
   - name: fact_delivery_performance
-    columns:
-      - name: event_date
-        tests: [not_null]
-      - name: city
-        tests: [not_null]
-      - name: delay_rate
-        tests: [not_null]
 
-  - name: fact_area_risk_daily
+    description: >
+      Metrik kinerja pengiriman harian yang diagregasi berdasarkan
+      kota operasional.
+
     columns:
       - name: event_date
-        tests: [not_null]
-      - name: city
-        tests: [not_null]
-      - name: risk_score
+        description: "Tanggal kejadian pengiriman."
         tests:
           - not_null
+
+      - name: city
+        description: "Kota operasional tempat aktivitas pengiriman terjadi."
+        tests:
+          - not_null
+
+      - name: orders
+        description: "Jumlah order unik yang tercatat pada tanggal dan kota tersebut."
+        tests:
+          - not_null
+
+      - name: delay_rate
+        description: >
+          Persentase order yang mengalami keterlambatan pengiriman
+          dengan nilai delay lebih dari nol.
+        tests:
+          - not_null
+
+  - name: fact_area_risk_daily
+
+    description: >
+      Model Gold yang menggabungkan risiko cuaca, risiko kualitas udara,
+      dan risiko keterlambatan logistik untuk membentuk risiko operasional
+      harian berdasarkan kota.
+
+    columns:
+      - name: event_date
+        description: "Tanggal penilaian risiko."
+        tests:
+          - not_null
+
+      - name: city
+        description: "Kota operasional yang dinilai."
+        tests:
+          - not_null
+
+      - name: risk_score
+        description: >
+          Skor risiko operasional berbobot dengan rentang nilai 0 sampai 100.
+          Skor dihitung dari weather risk, air quality risk, dan logistics risk.
+        tests:
+          - not_null
+
+      - name: risk_band
+        description: >
+          Kategori risiko operasional berdasarkan rentang risk score.
+          Nilai INSUFFICIENT_DATA digunakan ketika seluruh komponen risiko
+          yang diperlukan tidak tersedia.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - LOW
+                  - MODERATE
+                  - HIGH
+                  - CRITICAL
+                  - INSUFFICIENT_DATA
+
+      - name: weather_risk
+        description: >
+          Skor risiko cuaca khusus project dengan rentang 0 sampai 100
+          yang berasal dari severity peringatan BMKG.
+
+      - name: air_quality_risk
+        description: >
+          Skor risiko kualitas udara khusus project dengan rentang 0 sampai 100
+          yang dihitung dari nilai PM2.5.
+
+      - name: delay_rate
+        description: >
+          Persentase order yang mengalami keterlambatan pengiriman.
+
+      - name: has_weather_data
+        description: >
+          Menunjukkan apakah data risiko cuaca tersedia untuk tanggal dan kota tersebut.
+
+      - name: has_air_quality_data
+        description: >
+          Menunjukkan apakah data kualitas udara terkini yang telah dipetakan
+          ke kota operasional tersedia.

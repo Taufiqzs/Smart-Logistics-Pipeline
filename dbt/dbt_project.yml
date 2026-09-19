@@ -1,3 +1,6 @@
+# Berkas dbt/dbt_project.yml
+# Konfigurasi dbt untuk project Smart Logistics.
+
 name: smart_logistics
 version: "1.0.0"
 config-version: 2

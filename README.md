@@ -1,65 +1,304 @@
 # Smart Logistics Weather-Air Quality Risk Pipeline
 
-Final Project Data Engineering - Purwadhika
+**Final Project Data Engineering — Purwadhika**
 
-## 1. Business problem
+## 1. Ringkasan Project
 
-Perusahaan logistik/ride-hailing membutuhkan visibilitas risiko operasional per area dan waktu dengan menggabungkan:
-- peringatan dini cuaca BMKG,
-- kualitas udara OpenAQ,
-- aktivitas order/driver logistik.
+**Smart Logistics Weather-Air Quality Risk Pipeline** adalah pipeline data engineering end-to-end yang menggabungkan data lingkungan dan data operasional logistik untuk membentuk gambaran risiko operasional berdasarkan kota/area dan waktu.
 
-Output utama adalah `risk_score` 0-100 per kota/area/time window yang dapat digunakan untuk dashboard, early warning, rerouting, dan insentif kondisi ekstrem.
+Pipeline menggabungkan empat sumber utama:
 
-## 2. Architecture
+- peringatan dini cuaca dari **BMKG**;
+- kualitas udara **PM2.5 dari OpenAQ**;
+- dataset logistik historis dari **Transportation and Logistics Tracking Dataset**;
+- data order/driver sintetis untuk mensimulasikan aktivitas operasional.
+
+Output utama adalah `risk_score` dengan rentang 0–100 beserta `risk_band`. Hasil akhir disimpan pada BigQuery Gold dan dapat digunakan oleh Looker Studio untuk pemantauan risiko operasional.
+
+> **Catatan:** skor risiko, bobot, dan normalisasi PM2.5 pada project ini merupakan asumsi desain project. Nilai tersebut bukan standar medis atau regulasi.
+
+---
+
+## 2. Permasalahan Bisnis
+
+Perusahaan logistik/ride-hailing membutuhkan visibilitas risiko operasional berdasarkan area dan waktu. Risiko tidak hanya dipengaruhi oleh kondisi internal seperti keterlambatan pengiriman, tetapi juga oleh kondisi eksternal seperti cuaca dan kualitas udara.
+
+Pipeline ini dirancang untuk menggabungkan sinyal tersebut sehingga tersedia satu sumber data analitik yang dapat digunakan untuk:
+
+- memantau kondisi risiko per kota;
+- melihat perubahan risiko dari waktu ke waktu;
+- mendukung early warning operasional;
+- menjadi dasar analisis keterlambatan pengiriman;
+- menyediakan data terstruktur untuk dashboard.
+
+---
+
+## 3. Tujuan Project
+
+Tujuan utama pipeline:
+
+1. menyediakan visibilitas risiko operasional berdasarkan area;
+2. menggabungkan data lingkungan dan data operasional dalam satu model analitik;
+3. memproses data batch dan streaming dalam satu arsitektur;
+4. menerapkan validasi kualitas data sebelum data digunakan pada layer analitik;
+5. menghasilkan tabel Gold yang siap digunakan dashboard;
+6. memberikan notifikasi email ketika task pada pipeline Airflow gagal.
+
+---
+
+## 4. Arsitektur Sistem
+
+Arsitektur aktual project terdiri dari jalur batch dan jalur streaming.
 
 ```text
-BMKG CAP -------- Airflow batch --------\
-                                          \
-OpenAQ -------- Pub/Sub streaming --------> GCS Bronze
-                                           |
-Synthetic GPS/Orders -- Pub/Sub ----------/
-                                           |
-                                      Dataflow / Beam
-                                  clean + standardize +
-                                  enrich + risk score
-                                           |
-                                           v
-                                     GCS Silver
-                                           |
-                                           v
-                                      BigQuery
-                                           |
-                                           v
-                                         dbt
-                                   Gold dashboard marts
-                                           |
-                              +------------+-------------+
-                              |                          |
-                         Looker Studio              Alert/ops
+                         BATCH
+
+ BMKG CAP
+    |
+    v
+ Airflow
+    |
+    v
+ GCS BRONZE
+    |
+    v
+ BMKG Processing
+    |
+    v
+ BigQuery SILVER
+
+
+                       STREAMING
+
+ OpenAQ API
+    |
+    v
+ Python Publisher
+    |
+    v
+ Pub/Sub
+    |
+    v
+ Dataflow / Apache Beam
+    |
+    v
+ GCS SILVER
+    |
+    v
+ BigQuery / External Table
+
+
+                  DATA OPERASIONAL
+
+ Dataset Logistik ------> GCS BRONZE / BigQuery
+ Data Sintetis ----------> GCS BRONZE / BigQuery
+
+
+ Semua sumber analitik
+          |
+          v
+     dbt Transformation
+          |
+          v
+   BigQuery GOLD MART
+          |
+          v
+     Looker Studio
+
+ Airflow Task Failure
+          |
+          v
+   on_failure_callback
+          |
+          v
+       Gmail SMTP
+          |
+          v
+     Email Penerima
 ```
 
-The same Apache Beam code is designed to support batch and streaming modes. Pub/Sub is used for event ingestion, while GCS is the durable raw/staging layer.
+### Prinsip arsitektur
 
-## 3. Data sources
+- **GCS** digunakan sebagai data lake untuk data Bronze/raw dan Silver hasil pemrosesan streaming.
+- **BigQuery** digunakan sebagai analytical warehouse.
+- **dbt** digunakan untuk membentuk model bisnis pada layer Gold.
+- **Airflow** digunakan untuk orkestrasi proses batch dan pemantauan kegagalan task.
+- **Pub/Sub** digunakan sebagai message broker untuk event streaming.
+- **Dataflow/Apache Beam** digunakan untuk parsing, validasi, enrichment, windowing, dan penulisan data streaming.
+- **Looker Studio** digunakan sebagai layer visualisasi.
+- **Cloud Composer tidak diperlukan** dalam desain project ini karena project menggunakan Apache Airflow yang dijalankan melalui Docker.
 
-### BMKG
-BMKG publishes weather early-warning data using Common Alerting Protocol (CAP), including affected subdistricts. The public endpoint is:
-`https://www.bmkg.go.id/alerts/nowcast/id`
+### Mengapa tidak membuat Bronze fisik kedua di BigQuery?
 
-BMKG states that the nowcast data are updated continuously and access is limited to 60 requests/minute/IP. Attribution to BMKG is required.
+GCS berfungsi sebagai data lake dan raw landing zone. BigQuery berfungsi sebagai analytical warehouse. Karena itu, project tidak membuat salinan fisik layer Bronze di BigQuery hanya untuk mengikuti istilah medallion.
 
-### OpenAQ
-OpenAQ API v3 requires an API key. This project uses location/latest data for near-real-time ingestion. Do not assume that a "latest" value is complete historical coverage; OpenAQ explicitly notes that latest values may not guarantee complete time-series coverage.
+---
 
-### Logistics
-Use the specified public Kaggle Transportation and Logistics Tracking Dataset as historical/batch input. Because the exact Kaggle file name can vary, place the downloaded CSV under `data/raw/logistics/`.
+## 5. Sumber Data
 
-Synthetic GPS/order events are generated with Python to simulate real-time operations.
+### 5.1 BMKG
 
-## 4. Risk model
+BMKG menyediakan data peringatan dini cuaca menggunakan **Common Alerting Protocol (CAP)**.
 
-The project intentionally uses an explainable weighted score instead of ML:
+Endpoint publik yang digunakan:
+
+```text
+https://www.bmkg.go.id/alerts/nowcast/id
+```
+
+Proses ingestion:
+
+```text
+BMKG CAP/RSS
+    |
+    v
+bmkg_ingest.py
+    |
+    v
+GCS Bronze
+    |
+    v
+bmkg_weather_risk.py
+    |
+    v
+BigQuery Silver
+```
+
+Data CAP diproses untuk mengambil informasi seperti:
+
+- identifier alert;
+- event;
+- severity;
+- urgency;
+- certainty;
+- waktu efektif;
+- waktu kedaluwarsa;
+- area terdampak.
+
+### 5.2 OpenAQ
+
+OpenAQ digunakan sebagai sumber kualitas udara mendekati real-time.
+
+Pipeline hanya menggunakan observasi **PM2.5** dengan `parameter_id = 2`.
+
+Alur aktual:
+
+```text
+OpenAQ API
+    |
+    v
+openaq_publisher.py
+    |
+    v
+Pub/Sub: openaq-events
+    |
+    v
+Dataflow / Apache Beam
+    |
+    +--> valid
+    |       |
+    |       v
+    |    GCS Silver
+    |
+    +--> invalid
+            |
+            v
+          Audit
+```
+
+Validasi yang diterapkan antara lain:
+
+- parameter harus PM2.5;
+- nilai pengukuran tidak boleh negatif atau NaN;
+- koordinat harus berada dalam batas geografis Indonesia;
+- timestamp pengukuran harus dapat diproses;
+- status freshness dihitung berdasarkan usia data.
+
+Project membedakan status freshness menjadi `CURRENT`, `STALE`, dan `FUTURE` sesuai hasil validasi pipeline.
+
+**Data stale tidak dianggap sebagai bukti bahwa kualitas udara sedang baik.** Jika data terkini tidak tersedia, kondisi tersebut harus diperlakukan sebagai keterbatasan ketersediaan data.
+
+### 5.3 Dataset Logistik Historis
+
+Dataset **Transportation and Logistics Tracking Dataset** digunakan sebagai baseline historis/batch untuk analisis performa pengiriman.
+
+Dataset ini bukan sumber real-time.
+
+### 5.4 Data Order/Driver Sintetis
+
+Data sintetis dibuat dengan Python untuk mensimulasikan aktivitas operasional seperti:
+
+- order;
+- lokasi/kota;
+- waktu pengiriman;
+- expected delivery time;
+- actual delivery time;
+- delay;
+- rating rute.
+
+Data sintetis digunakan untuk kebutuhan pengembangan dan demonstrasi pipeline karena data operasional internal tidak tersedia sebagai dataset publik.
+
+---
+
+## 6. Model Data dan Layer
+
+### 6.1 GCS Bronze
+
+Bronze digunakan untuk mempertahankan data sumber dalam bentuk sedekat mungkin dengan bentuk aslinya.
+
+Contoh struktur aktual:
+
+```text
+gs://jcdeah-009-smart-logistics-raw/
+├── bmkg/
+│   └── weather_warning/
+│       ├── feed/
+│       └── cap/
+├── logistics/
+│   └── historical/
+└── logistics/
+    └── synthetic/
+```
+
+### 6.2 GCS Silver
+
+Silver digunakan untuk data streaming yang telah melalui parsing, validasi, dan enrichment.
+
+Contoh:
+
+```text
+gs://jcdeah-009-smart-logistics-silver/
+└── openaq/
+    └── events-*.jsonl
+```
+
+### 6.3 BigQuery Silver
+
+Dataset BigQuery Silver digunakan untuk data yang telah dipersiapkan untuk analitik, termasuk:
+
+```text
+smart_logistics_silver.environment_risk_daily
+smart_logistics_silver.openaq_air_quality_daily
+smart_logistics_silver.openaq_station_mapping
+smart_logistics_silver.openaq_events_external
+```
+
+### 6.4 BigQuery Gold
+
+Model Gold dibuat menggunakan dbt.
+
+Model utama:
+
+```text
+smart_logistics_gold.fact_delivery_performance
+smart_logistics_gold.fact_area_risk_daily
+```
+
+---
+
+## 7. Model Risiko
+
+Project menggunakan weighted score yang sederhana dan mudah dijelaskan, bukan machine learning.
 
 ```text
 risk_score =
@@ -68,167 +307,403 @@ risk_score =
   + 0.20 * logistics_risk
 ```
 
-Each component is normalized to 0-100.
+Setiap komponen memiliki rentang 0–100.
 
-Weather:
-- severity/severity keywords from BMKG CAP
-- alert active/expired
-- affected area
+### 7.1 Risiko Cuaca
 
-Air quality:
-- PM2.5 / PM10 when available
-- normalized using configurable thresholds
+Pemetaan severity BMKG:
 
-Logistics:
-- delay rate
-- average actual delivery time vs expected delivery time
+```text
+minor     = 25
+moderate  = 50
+severe    = 80
+extreme   = 100
+```
 
-Risk bands:
-- 0-24: LOW
-- 25-49: MODERATE
-- 50-74: HIGH
-- 75-100: CRITICAL
+### 7.2 Risiko Kualitas Udara
 
-These thresholds are project assumptions and should be documented to the mentor rather than presented as medical or regulatory thresholds.
+Risiko kualitas udara dihitung dari nilai PM2.5 dan dinormalisasi ke 0–100.
 
-## 5. Repository structure
+Normalisasi ini merupakan **asumsi desain project**, bukan batas medis atau batas regulasi kualitas udara.
+
+### 7.3 Risiko Logistik
+
+```text
+delay_rate = delayed_orders / total_orders
+logistics_risk = min(delay_rate * 100, 100)
+```
+
+### 7.4 Kategori Risiko
+
+```text
+0–24    LOW
+25–49   MODERATE
+50–74   HIGH
+75–100  CRITICAL
+```
+
+Jika seluruh komponen risiko tidak tersedia, model menghasilkan:
+
+```text
+INSUFFICIENT_DATA
+```
+
+Model juga mempertahankan flag ketersediaan data seperti:
+
+```text
+has_weather_data
+has_air_quality_data
+```
+
+Hal ini mencegah kondisi data yang hilang langsung dianggap sebagai kondisi operasional yang aman.
+
+---
+
+## 8. Kualitas Data
+
+Validasi utama pada pipeline meliputi:
+
+1. kolom wajib tidak boleh null;
+2. timestamp harus dapat diproses;
+3. latitude dan longitude harus berada pada batas geografis Indonesia;
+4. nilai PM2.5 tidak boleh negatif atau NaN;
+5. hanya parameter PM2.5 yang digunakan pada jalur OpenAQ;
+6. `validation_status` menunjukkan hasil validasi data;
+7. `freshness_status` menunjukkan kesegaran observasi OpenAQ;
+8. `risk_score` harus berada pada rentang 0–100;
+9. `risk_band` harus konsisten dengan rentang `risk_score`;
+10. pengujian dbt memeriksa constraint dan business rule utama.
+
+### OpenAQ freshness
+
+OpenAQ dapat menyediakan data dengan usia yang berbeda-beda. Karena itu pipeline menyimpan:
+
+```text
+measurement_age_hours
+freshness_status
+```
+
+Data yang terlalu lama diberi status `STALE` dan tidak digunakan sebagai representasi kondisi udara terkini.
+
+---
+
+## 9. Pemetaan Stasiun OpenAQ
+
+Tidak semua lokasi OpenAQ otomatis dianggap sebagai kota operasional project.
+
+Project menggunakan tabel pemetaan eksplisit:
+
+```text
+smart_logistics_silver.openaq_station_mapping
+```
+
+Pemetaan saat ini mencakup kota operasional yang digunakan model analitik, seperti:
+
+- Jakarta;
+- Bandung;
+- Yogyakarta;
+- Medan.
+
+Pendekatan ini digunakan untuk menghindari asumsi bahwa nama lokasi OpenAQ selalu cukup untuk menentukan kota operasional.
+
+---
+
+## 10. Struktur Repositori
+
+Struktur utama project:
 
 ```text
 smart-logistics-weather-air-quality/
 ├── dags/
-│   └── smart_logistics_pipeline.py
+│   ├── smart_logistics_pipeline.py
+│   └── test_email_alert.py
 ├── data/
-│   └── raw/logistics/.gitkeep
-├── docker/
 ├── dbt/
 │   ├── dbt_project.yml
 │   ├── profiles.yml.example
-│   └── models/
-│       ├── staging/
-│       └── marts/
+│   ├── models/
+│   └── tests/
 ├── schemas/
+├── sql/
 │   └── bigquery/
 ├── src/
 │   ├── ingestion/
-│   │   ├── bmkg_ingest.py
-│   │   ├── openaq_publisher.py
-│   │   └── synthetic_events.py
+│   ├── processing/
 │   ├── beam/
-│   │   └── risk_pipeline.py
 │   └── common/
-│       └── config.py
 ├── tests/
 ├── Dockerfile
 ├── docker-compose.yml
+├── docker-compose.airflow.yml
 ├── requirements.txt
 └── .env.example
 ```
 
-## 6. Local quick start
+### Modul penting
 
-### Prerequisites
-- Docker Desktop
-- Python 3.11+
-- GCP project for cloud execution
-- OpenAQ API key
-- `gcloud` CLI for cloud deployment
+```text
+src/ingestion/bmkg_ingest.py
+```
+Mengambil dan menyimpan data peringatan BMKG ke GCS Bronze.
 
-### Environment
+```text
+src/ingestion/openaq_publisher.py
+```
+Mengambil observasi OpenAQ yang relevan dan menerbitkannya ke Pub/Sub.
 
-```bash
-cp .env.example .env
-# edit .env
+```text
+src/beam/openaq_streaming_dataflow.py
+```
+Pipeline Apache Beam untuk membaca Pub/Sub, memvalidasi data OpenAQ, memberi status freshness, dan menulis hasil ke GCS Silver.
+
+```text
+src/processing/bmkg_weather_risk.py
+```
+Mengubah data CAP BMKG menjadi data risiko cuaca berdasarkan severity.
+
+```text
+src/processing/load_bmkg_weather.py
+```
+Memuat hasil risiko cuaca ke BigQuery Silver.
+
+```text
+src/common/airflow_alerts.py
+```
+Mengirim email ketika task Airflow gagal menggunakan Gmail SMTP.
+
+```text
+dbt/models/marts/fact_area_risk_daily.sql
+```
+Membentuk model Gold untuk menggabungkan weather risk, air quality risk, dan logistics risk.
+
+> Nama file dan modul yang ditampilkan di atas adalah identifier teknis dan dipertahankan sesuai repository.
+
+---
+
+## 11. Menjalankan Secara Lokal
+
+### 11.1 Prasyarat
+
+- Docker Desktop;
+- Python 3.11+;
+- virtual environment Python;
+- project GCP;
+- Google Cloud CLI (`gcloud`);
+- kredensial Application Default Credentials (ADC);
+- API key OpenAQ untuk akses API sesuai konfigurasi project.
+
+### 11.2 Membuat Environment
+
+```cmd
+copy .env.example .env
 ```
 
-### Generate synthetic logistics events
+Kemudian isi nilai rahasia pada `.env`.
 
-```bash
+**Jangan commit `.env` yang berisi password, App Password Gmail, API key, JWT secret, atau credential lainnya.**
+
+### 11.3 Membuat Data Logistik Sintetis
+
+```cmd
 python -m src.ingestion.synthetic_events --rows 5000 --output data/raw/logistics/synthetic_orders.csv
 ```
 
-### Test BMKG ingestion
+### 11.4 Menjalankan Ingestion BMKG
 
-```bash
-python -m src.ingestion.bmkg_ingest --output data/raw/bmkg
+```cmd
+python -m src.ingestion.bmkg_ingest
 ```
 
-### Test OpenAQ publisher
+Script akan menggunakan konfigurasi GCS dari environment dan mengunggah data BMKG ke bucket Bronze.
 
-```bash
-python -m src.ingestion.openaq_publisher --once
+### 11.5 Menjalankan Publisher OpenAQ
+
+```cmd
+python -m src.ingestion.openaq_publisher
 ```
 
-### Start Airflow
+Publisher akan mencari lokasi Indonesia yang memiliki parameter PM2.5, memeriksa observasi terkini, memvalidasi lokasi/sensor, lalu menerbitkan event yang memenuhi syarat ke Pub/Sub.
 
-```bash
-docker compose up airflow-init
-docker compose up -d
+### 11.6 Menjalankan Dataflow Streaming
+
+Pipeline production dijalankan dengan Dataflow Runner pada GCP.
+
+Untuk menjalankan dari Windows host, pastikan Application Default Credentials menggunakan path Windows yang valid, misalnya:
+
+```cmd
+set GOOGLE_APPLICATION_CREDENTIALS=C:\Users\TAUFIQ\AppData\Roaming\gcloud\application_default_credentials.json
+set GOOGLE_CLOUD_PROJECT=jcdeah-009
+python -m src.beam.openaq_streaming_dataflow
 ```
 
-Airflow UI: http://localhost:8080
+**Catatan:** path `/home/airflow/.config/gcloud/application_default_credentials.json` digunakan di dalam container Airflow, bukan sebagai path Windows host.
 
-Default development login:
-- user: `airflow`
-- password: `airflow`
+### 11.7 Menjalankan dbt
 
-## 7. GCP setup
-
-Create APIs:
-
-```bash
-gcloud services enable \
-  storage.googleapis.com \
-  pubsub.googleapis.com \
-  dataflow.googleapis.com \
-  bigquery.googleapis.com \
-  composer.googleapis.com
+```cmd
+cd dbt
+dbt debug --profiles-dir .
+dbt run --profiles-dir .
+dbt test --profiles-dir .
 ```
 
-Create buckets:
+---
 
-```bash
-gsutil mb -l asia-southeast2 gs://$GCP_PROJECT_ID-smart-logistics-raw
-gsutil mb -l asia-southeast2 gs://$GCP_PROJECT_ID-smart-logistics-silver
-gsutil mb -l asia-southeast2 gs://$GCP_PROJECT_ID-smart-logistics-temp
+## 12. Menjalankan Airflow
+
+Airflow dijalankan menggunakan Docker Compose.
+
+```cmd
+docker compose -f docker-compose.airflow.yml up -d
 ```
 
-Create Pub/Sub topics:
-
-```bash
-gcloud pubsub topics create openaq-events
-gcloud pubsub topics create driver-events
-```
-
-The production deployment should use Secret Manager for `OPENAQ_API_KEY`; `.env` is only for local development.
-
-## 8. Bronze naming convention
-
-Monthly source files must be normalized into daily partitions:
+Komponen utama:
 
 ```text
-gs://PROJECT-smart-logistics-raw/
-  source=bmkg/
-    ingestion_date=2026-09-16/
-      bmkg_20260916T110000Z.xml
-
-  source=openaq/
-    ingestion_date=2026-09-16/
-      openaq_20260916T110000Z.jsonl
-
-  source=logistics/
-    event_date=2026-09-16/
-      logistics_20260916.jsonl
-
-  source=driver/
-    event_date=2026-09-16/
-      driver_20260916.jsonl
+PostgreSQL
+Airflow Webserver / API Server
+Airflow Scheduler
+Airflow DAG Processor
 ```
 
-This satisfies the requirement to turn monthly/bulk source files into daily storage partitions without altering the original raw records.
+Airflow UI:
 
-## 9. BigQuery layers
+```text
+http://localhost:8080
+```
 
-Recommended datasets:
+DAG utama:
+
+```text
+smart_logistics_pipeline
+```
+
+Urutan task:
+
+```text
+ingest_bmkg
+    ↓
+process_bmkg_weather
+    ↓
+load_bmkg_weather
+    ↓
+run_dbt
+    ↓
+test_dbt
+```
+
+`ingest_logistics` berjalan paralel setelah task yang diperlukan untuk dbt tersedia, kemudian menjadi dependency untuk `run_dbt`.
+
+### Mendapatkan password Airflow
+
+Jika menggunakan SimpleAuthManager dan password dibuat oleh container, password dapat dilihat melalui log webserver:
+
+```cmd
+docker compose -f docker-compose.airflow.yml logs airflow-webserver | findstr /i "Password for user"
+```
+
+---
+
+## 13. Email Alert Kegagalan Pipeline
+
+Pipeline memiliki mekanisme failure alert berbasis email.
+
+Alur:
+
+```text
+Airflow Task
+     |
+     | gagal
+     v
+on_failure_callback
+     |
+     v
+notify_pipeline_failure()
+     |
+     v
+Gmail SMTP + STARTTLS
+     |
+     v
+Email Penerima
+```
+
+Ketika task gagal, callback mengumpulkan informasi:
+
+- DAG ID;
+- task yang gagal;
+- Run ID;
+- waktu eksekusi;
+- detail exception;
+- tautan ke log task Airflow.
+
+Email menggunakan Gmail SMTP pada port `587` dengan STARTTLS.
+
+### Konfigurasi Gmail
+
+Gunakan Gmail App Password, bukan password Gmail biasa.
+
+Contoh konfigurasi:
+
+```env
+AIRFLOW__SMTP__SMTP_HOST=smtp.gmail.com
+AIRFLOW__SMTP__SMTP_PORT=587
+AIRFLOW__SMTP__SMTP_STARTTLS=true
+AIRFLOW__SMTP__SMTP_SSL=false
+AIRFLOW__SMTP__SMTP_USER=yourgmail@gmail.com
+AIRFLOW__SMTP__SMTP_PASSWORD=YOUR_GMAIL_APP_PASSWORD
+AIRFLOW__SMTP__SMTP_MAIL_FROM=yourgmail@gmail.com
+AIRFLOW_ALERT_EMAIL=mentor@example.com
+```
+
+Panduan pengujian lengkap tersedia pada `ALERT_SETUP.md`.
+
+### Bukti pengujian
+
+Project menyediakan DAG pengujian:
+
+```text
+test_email_alert
+```
+
+DAG tersebut sengaja membuat task gagal untuk memastikan callback email dapat berjalan. Pengujian berhasil menghasilkan email alert Gmail dengan informasi DAG, task, Run ID, waktu eksekusi, detail error, dan tautan log Airflow.
+
+---
+
+## 14. Konfigurasi GCP
+
+Aktifkan API yang diperlukan:
+
+```cmd
+gcloud services enable ^
+  storage.googleapis.com ^
+  pubsub.googleapis.com ^
+  dataflow.googleapis.com ^
+  bigquery.googleapis.com ^
+  secretmanager.googleapis.com
+```
+
+Bucket utama project:
+
+```text
+jcdeah-009-smart-logistics-raw
+jcdeah-009-smart-logistics-silver
+jcdeah-009-smart-logistics-temp
+```
+
+Topik Pub/Sub:
+
+```text
+openaq-events
+driver-events
+```
+
+Untuk deployment produksi, API key OpenAQ sebaiknya disimpan pada Secret Manager. File `.env` digunakan untuk pengembangan lokal.
+
+---
+
+## 15. Dataset BigQuery
+
+Dataset yang digunakan:
 
 ```text
 smart_logistics_bronze
@@ -237,71 +712,131 @@ smart_logistics_gold
 smart_logistics_audit
 ```
 
-Gold tables:
+Contoh tabel/model penting:
 
 ```text
-fact_area_risk_daily
-fact_delivery_performance
-fact_driver_risk_event
-dim_area
-dim_date
+smart_logistics_bronze.driver_events
+smart_logistics_silver.environment_risk_daily
+smart_logistics_silver.openaq_events_external
+smart_logistics_silver.openaq_air_quality_daily
+smart_logistics_silver.openaq_station_mapping
+smart_logistics_gold.fact_delivery_performance
+smart_logistics_gold.fact_area_risk_daily
 ```
 
-Dashboard queries should read only from Gold.
+`fact_area_risk_daily` merupakan sumber utama dashboard risiko.
 
-## 10. Data quality
+---
 
-Minimum checks:
-1. required columns not null,
-2. event timestamps valid,
-3. latitude/longitude within Indonesia bounds,
-4. risk score between 0 and 100,
-5. no duplicate event_id,
-6. weather alerts have valid severity,
-7. delivery time >= 0,
-8. dashboard table is not stale.
+## 16. Dashboard Looker Studio
 
-dbt tests are included for key fields.
+Dashboard menggunakan Looker Studio dengan sumber utama:
 
-## 11. Dashboard
+```text
+smart_logistics_gold.fact_area_risk_daily
+```
 
-Minimum charts:
-1. Line: daily risk score by city for last 30 days.
-2. Bar/heatmap: current risk by city/area.
+Visualisasi yang disarankan:
 
-Optional:
-3. Scatter: risk score vs actual delivery time.
-4. KPI cards: current critical areas, average risk, active weather alerts, average delay.
+1. KPI rata-rata risk score;
+2. jumlah area dengan risk band HIGH/CRITICAL;
+3. rata-rata delay rate;
+4. coverage data kualitas udara;
+5. risk score berdasarkan kota;
+6. tren risk score dari waktu ke waktu;
+7. weather risk;
+8. air quality risk;
+9. tabel detail operasional.
 
-Suggested dashboard title:
+`INSUFFICIENT_DATA` sebaiknya tetap ditampilkan agar dashboard tidak menyamarkan keterbatasan data.
+
+Judul dashboard:
 
 **Smart Logistics Environmental Risk Monitor**
 
-Problem statement should be visible on the dashboard:
-> Mengidentifikasi area dan waktu berisiko tinggi dengan menggabungkan cuaca, kualitas udara, dan aktivitas logistik agar keputusan operasional dapat dilakukan lebih cepat dan berbasis data.
+Pertanyaan bisnis:
 
-## 12. Failure alert
+> Area/kota mana yang memiliki risiko operasional berdasarkan kombinasi cuaca, kualitas udara, dan aktivitas logistik, dan bagaimana perubahannya dari waktu ke waktu?
 
-Airflow DAG has failure callbacks. In production, replace the placeholder callback with:
-- email,
-- Slack webhook,
-- Google Chat webhook,
-- PagerDuty,
-or another approved notification channel.
+---
 
-## 13. Mentor presentation storyline
+## 17. Pengujian
 
-1. Business problem
-2. Why three data sources are needed
-3. Why batch + streaming
-4. Why GCS is the raw source of truth
-5. Why Dataflow/Beam is used for common processing logic
-6. Why BigQuery is the analytical warehouse
-7. Why dbt is used for final business modeling
-8. Explain the risk formula
-9. Demonstrate one BMKG alert and one OpenAQ event
-10. Show how a synthetic driver/order event changes operational risk
-11. Show dashboard
-12. Explain data quality and failure alerting
-13. Explain scalability and cost considerations
-14. Explain limitations and future improvements
+### Pengujian Python
+
+Test dapat dijalankan dengan:
+
+```cmd
+pytest
+```
+
+### Pengujian dbt
+
+```cmd
+cd dbt
+dbt test --profiles-dir .
+```
+
+Pengujian dbt mencakup:
+
+- `not_null`;
+- `accepted_values` untuk risk band;
+- rentang risk score;
+- konsistensi risk band terhadap risk score.
+
+### Pengujian Email Alert
+
+```text
+test_email_alert
+```
+
+DAG ini digunakan khusus untuk menguji failure callback tanpa mengubah pipeline utama.
+
+---
+
+## 18. Keterbatasan Project
+
+1. Data logistik sintetis tidak mewakili seluruh kondisi operasional dunia nyata.
+2. Ketersediaan stasiun OpenAQ berbeda antarwilayah.
+3. Data OpenAQ yang stale tidak dapat digunakan untuk menggambarkan kondisi udara terkini.
+4. Pemetaan stasiun OpenAQ ke kota operasional menggunakan mapping eksplisit project.
+5. Risk score dan bobotnya merupakan asumsi desain project.
+6. Threshold PM2.5 yang digunakan untuk normalisasi bukan standar medis atau regulasi.
+7. Streaming Dataflow membutuhkan resource GCP dan dapat menimbulkan biaya cloud.
+
+---
+
+## 19. Pengembangan Selanjutnya
+
+Pengembangan yang dapat dilakukan:
+
+- memperluas mapping stasiun OpenAQ;
+- menambahkan lebih banyak sumber kualitas udara;
+- mengintegrasikan GPS driver real-time secara penuh;
+- menambahkan alert berbasis risk band;
+- menggunakan Secret Manager untuk seluruh secret production;
+- menambahkan monitoring Dataflow dan pipeline-level metrics;
+- menambahkan historisasi perubahan risk score;
+- mengembangkan model prediktif setelah tersedia data historis yang memadai.
+
+---
+
+## 20. Alur Presentasi Mentor
+
+Urutan penjelasan yang disarankan:
+
+1. jelaskan permasalahan bisnis;
+2. jelaskan empat sumber data;
+3. jelaskan perbedaan batch dan streaming;
+4. jelaskan GCS sebagai data lake;
+5. jelaskan Pub/Sub dan Dataflow pada jalur OpenAQ;
+6. jelaskan BigQuery sebagai analytical warehouse;
+7. jelaskan dbt sebagai business transformation layer;
+8. jelaskan formula risk score;
+9. demonstrasikan data BMKG;
+10. demonstrasikan event OpenAQ;
+11. demonstrasikan hasil BigQuery Gold;
+12. tampilkan dashboard Looker Studio;
+13. demonstrasikan failure alert Gmail;
+14. tampilkan hasil `dbt test`;
+15. jelaskan keterbatasan dan pengembangan berikutnya.

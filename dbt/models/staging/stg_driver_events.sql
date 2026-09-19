@@ -1,3 +1,6 @@
+-- Berkas dbt/models/staging/stg_driver_events.sql
+-- Menyiapkan data event driver dari layer Bronze untuk digunakan oleh model dbt.
+
 select
   cast(event_id as string) as event_id,
   timestamp(event_ts) as event_ts,

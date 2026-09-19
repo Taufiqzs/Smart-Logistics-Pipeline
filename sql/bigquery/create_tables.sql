@@ -1,3 +1,6 @@
+-- Berkas sql/bigquery/create_tables.sql
+-- Membuat tabel BigQuery yang diperlukan oleh pipeline Smart Logistics.
+
 CREATE TABLE IF NOT EXISTS `smart_logistics_silver.logistics_events` (
   event_id STRING NOT NULL, event_ts TIMESTAMP, city STRING, driver_id STRING, order_id STRING,
   latitude FLOAT64, longitude FLOAT64, expected_delivery_min INT64, actual_delivery_min INT64,

@@ -1,31 +1,202 @@
-from datetime import datetime, timedelta
-from airflow import DAG
-from airflow.operators.bash import BashOperator
-from airflow.operators.python import PythonOperator
+"""
+DAG utama Smart Logistics Weather-Air Quality Risk Pipeline.
 
-def failure_alert(context):
-    print(f"[ALERT] Pipeline failed: {context['dag'].dag_id}.{context['task_instance'].task_id}")
+Pipeline ini melakukan:
+1. Ingest data peringatan cuaca BMKG.
+2. Memproses data cuaca menjadi weather risk.
+3. Memuat weather risk ke BigQuery.
+4. Ingest data logistics historis/sintetis.
+5. Menjalankan dbt transformation.
+6. Menjalankan dbt data quality tests.
+
+Jika salah satu task gagal, Airflow akan menjalankan
+notify_pipeline_failure() dan mengirimkan email alert.
+"""
+
+import pendulum
+
+from airflow.sdk import DAG
+from airflow.providers.standard.operators.bash import BashOperator
+
+from src.common.airflow_alerts import notify_pipeline_failure
+
+
+# ============================================================
+# KONFIGURASI PROJECT
+# ============================================================
+
+# Direktori utama project di dalam container Airflow.
+PROJECT_ROOT = "/opt/airflow"
+
+
+# ============================================================
+# DEFINISI DAG
+# ============================================================
 
 with DAG(
-    dag_id='smart_logistics_weather_air_quality',
-    start_date=datetime(2026,1,1),
-    schedule='0 */3 * * *',
+    # ID unik DAG di Airflow.
+    dag_id="smart_logistics_pipeline",
+
+    # Deskripsi DAG.
+    description=(
+        "Smart Logistics Weather-Air Quality "
+        "Risk Pipeline"
+    ),
+
+    # Waktu mulai DAG.
+    start_date=pendulum.datetime(
+        2026,
+        9,
+        19,
+        tz="Asia/Jakarta",
+    ),
+
+    # DAG dijalankan secara manual.
+    schedule=None,
+
+    # Tidak menjalankan backfill untuk tanggal sebelumnya.
     catchup=False,
-    default_args={'owner':'data-engineering','retries':2,'retry_delay':timedelta(minutes=5),'on_failure_callback':failure_alert},
-    tags=['purwadhika','gcp','logistics'],
+
+    # Tag untuk mempermudah filtering di Airflow UI.
+    tags=[
+        "smart-logistics",
+        "gcp",
+        "bmkg",
+        "openaq",
+        "dbt",
+        "risk-pipeline",
+    ],
+
+    # ========================================================
+    # NOTIFIKASI EMAIL KETIKA PIPELINE GAGAL
+    # ========================================================
+    #
+    # Callback ini akan dipanggil ketika DAG mengalami
+    # kegagalan.
+    #
+    # Fungsi notify_pipeline_failure() akan:
+    # - mengambil informasi DAG
+    # - mengambil task yang gagal
+    # - mengambil Run ID
+    # - mengambil waktu eksekusi
+    # - mengambil exception
+    # - mengambil URL log Airflow
+    # - mengirim email melalui Gmail SMTP
+    #
+    on_failure_callback=notify_pipeline_failure,
+
 ) as dag:
-    ingest_bmkg=BashOperator(
-        task_id='bmkg_to_gcs_bronze',
-        bash_command='python -m src.ingestion.bmkg_ingest --output /opt/airflow/data/raw',
+
+    # ========================================================
+    # 1. INGEST BMKG
+    # ========================================================
+
+    ingest_bmkg = BashOperator(
+        task_id="ingest_bmkg",
+
+        bash_command=(
+            f"cd {PROJECT_ROOT} && "
+            "python -m src.ingestion.bmkg_ingest"
+        ),
     )
-    trigger_dataflow=BashOperator(
-        task_id='trigger_dataflow_batch',
-        bash_command='echo "Production: submit src.beam.risk_pipeline to DataflowRunner using GCS Bronze as input and GCS Silver as output"',
+
+
+    # ========================================================
+    # 2. MEMPROSES RISIKO CUACA BMKG
+    # ========================================================
+
+    process_bmkg_weather = BashOperator(
+        task_id="process_bmkg_weather",
+
+        bash_command=(
+            f"cd {PROJECT_ROOT} && "
+            "python -m src.processing.bmkg_weather_risk"
+        ),
     )
-    load_bigquery=BashOperator(
-        task_id='load_silver_to_bigquery',
-        bash_command='echo "Production: load GCS Silver partitions into smart_logistics_silver"',
+
+
+    # ========================================================
+    # 3. MEMUAT RISIKO CUACA BMKG
+    # ========================================================
+
+    load_bmkg_weather = BashOperator(
+        task_id="load_bmkg_weather",
+
+        bash_command=(
+            f"cd {PROJECT_ROOT} && "
+            "python -m src.processing.load_bmkg_weather"
+        ),
     )
-    dbt_run=BashOperator(task_id='dbt_run',bash_command='dbt run --project-dir /opt/airflow/dbt')
-    dbt_test=BashOperator(task_id='dbt_test',bash_command='dbt test --project-dir /opt/airflow/dbt')
-    ingest_bmkg >> trigger_dataflow >> load_bigquery >> dbt_run >> dbt_test
+
+
+    # ========================================================
+    # 4. MENGAMBIL DATA LOGISTIK
+    # ========================================================
+
+    ingest_logistics = BashOperator(
+        task_id="ingest_logistics",
+
+        bash_command=(
+            f"cd {PROJECT_ROOT} && "
+            "python -m src.ingestion.logistics_ingest"
+        ),
+    )
+
+
+    # ========================================================
+    # 5. MENJALANKAN DBT
+    # ========================================================
+
+    run_dbt = BashOperator(
+        task_id="run_dbt",
+
+        bash_command=(
+            f"cd {PROJECT_ROOT}/dbt && "
+            "rm -rf target && dbt run --no-partial-parse --profiles-dir ."
+        ),
+    )
+
+    # ========================================================
+    # 6. MENJALANKAN PENGUJIAN DBT
+    # ========================================================
+
+    test_dbt = BashOperator(
+        task_id="test_dbt",
+
+        bash_command=(
+            f"cd {PROJECT_ROOT}/dbt && "
+            "rm -rf target && dbt test --no-partial-parse --profiles-dir ."
+        ),
+    )
+
+
+    # ========================================================
+    # DEPENDENSI / ALUR KERJA
+    # ========================================================
+
+    # BMKG:
+    #
+    # ingest BMKG
+    #      ↓
+    # memproses risiko cuaca
+    #      ↓
+    # memuat risiko cuaca
+    #
+    ingest_bmkg >> process_bmkg_weather
+    process_bmkg_weather >> load_bmkg_weather
+
+
+    # Ingestion data logistik berjalan sebagai dependensi
+    # terpisah sebelum dbt.
+    #
+    # Setelah data cuaca BMKG dan data logistik selesai,
+    # dbt dapat dijalankan.
+    [
+        load_bmkg_weather,
+        ingest_logistics,
+    ] >> run_dbt
+
+
+    # Setelah transformasi dbt selesai,
+    # jalankan pengujian kualitas data.
+    run_dbt >> test_dbt

@@ -1,0 +1,14 @@
+# Berkas dbt/profiles.yml
+# Konfigurasi koneksi dbt ke BigQuery.
+# Nilai autentikasi tetap dipertahankan seperti file asli.
+
+smart_logistics:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: oauth
+      project: jcdeah-009
+      dataset: smart_logistics_gold
+      location: asia-southeast2
+      threads: 4

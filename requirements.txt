@@ -2,8 +2,13 @@ apache-beam[gcp]==2.69.0
 google-cloud-pubsub>=2.31,<3
 google-cloud-storage>=2.19,<3
 google-cloud-bigquery>=3.35,<4
+
 requests>=2.32,<3
 python-dotenv>=1.1,<2
 faker>=37,<38
 pandas>=2.2,<3
+openpyxl>=3.1,<4
+
 pytest>=8,<9
+dbt-core==1.12.5
+dbt-bigquery==1.12.1

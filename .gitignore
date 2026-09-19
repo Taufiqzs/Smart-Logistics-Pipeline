@@ -10,3 +10,6 @@ data/raw/logistics/*
 dbt/target/
 dbt/logs/
 *.json
+DOKUMENTASI_KODE_INDONESIA.md
+ALERT_SETUP.md
+ARCHITECTURE.md

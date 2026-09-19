@@ -1,3 +1,6 @@
+# File dbt/profiles.yml.example
+# Konfigurasi dbt untuk project Smart Logistics.
+
 smart_logistics:
   target: dev
   outputs:

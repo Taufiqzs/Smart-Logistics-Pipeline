@@ -444,36 +444,43 @@ smart-logistics-weather-air-quality/
 ```text
 src/ingestion/bmkg_ingest.py
 ```
+
 Mengambil dan menyimpan data peringatan BMKG ke GCS Bronze.
 
 ```text
 src/ingestion/openaq_publisher.py
 ```
+
 Mengambil observasi OpenAQ yang relevan dan menerbitkannya ke Pub/Sub.
 
 ```text
 src/beam/openaq_streaming_dataflow.py
 ```
+
 Pipeline Apache Beam untuk membaca Pub/Sub, memvalidasi data OpenAQ, memberi status freshness, dan menulis hasil ke GCS Silver.
 
 ```text
 src/processing/bmkg_weather_risk.py
 ```
+
 Mengubah data CAP BMKG menjadi data risiko cuaca berdasarkan severity.
 
 ```text
 src/processing/load_bmkg_weather.py
 ```
+
 Memuat hasil risiko cuaca ke BigQuery Silver.
 
 ```text
 src/common/airflow_alerts.py
 ```
+
 Mengirim email ketika task Airflow gagal menggunakan Gmail SMTP.
 
 ```text
 dbt/models/marts/fact_area_risk_daily.sql
 ```
+
 Membentuk model Gold untuk menggabungkan weather risk, air quality risk, dan logistics risk.
 
 > Nama file dan modul yang ditampilkan di atas adalah identifier teknis dan dipertahankan sesuai repository.
@@ -498,6 +505,41 @@ Membentuk model Gold untuk menggabungkan weather risk, air quality risk, dan log
 copy .env.example .env
 ```
 
+### Setup Environment
+
+1. Create Virtual Environment
+
+Buat virtual environment agar dependency project terisolasi dari instalasi Python sistem.
+
+````cmd
+python -m venv .venv
+
+2. Aktifkan Virtual Environment
+.venv\Scripts\activate
+
+Jika berhasil, terminal akan menampilkan:
+(.venv) C:\Users\...\Final_Project>
+
+3. Upgrade pip
+python -m pip install --upgrade pip
+
+4. Install Dependencies
+pip install -r requirements.txt
+
+5. Verifikasi Environment
+python --version
+pip --version
+
+6. login gcloud Application Default Credentials (ADC):
+gcloud auth application-default login
+
+7. set the quota project:
+gcloud auth application-default set-quota-project jcdeah-009
+
+8. Verify ADC:
+gcloud auth application-default print-access-token
+
+
 Kemudian isi nilai rahasia pada `.env`.
 
 **Jangan commit `.env` yang berisi password, App Password Gmail, API key, JWT secret, atau credential lainnya.**
@@ -506,9 +548,13 @@ Kemudian isi nilai rahasia pada `.env`.
 
 ```cmd
 python -m src.ingestion.synthetic_events --rows 5000 --output data/raw/logistics/synthetic_orders.csv
-```
+````
 
 ### 11.4 Menjalankan Ingestion BMKG
+
+Karena run di windows untuk demonstrasi, di set sementara credentials, JANGAN diubah yang .env untuk ngerun docker airflow
+set GOOGLE_APPLICATION_CREDENTIALS=C:\Users\TAUFIQ\AppData\Roaming\gcloud\application_default_credentials.json
+set GOOGLE_CLOUD_PROJECT=jcdeah-009
 
 ```cmd
 python -m src.ingestion.bmkg_ingest
@@ -517,6 +563,10 @@ python -m src.ingestion.bmkg_ingest
 Script akan menggunakan konfigurasi GCS dari environment dan mengunggah data BMKG ke bucket Bronze.
 
 ### 11.5 Menjalankan Publisher OpenAQ
+
+Karena run di windows untuk demonstrasi, di set sementara credentials, JANGAN diubah yang .env untuk ngerun docker airflow
+set GOOGLE_APPLICATION_CREDENTIALS=C:\Users\TAUFIQ\AppData\Roaming\gcloud\application_default_credentials.json
+set GOOGLE_CLOUD_PROJECT=jcdeah-009
 
 ```cmd
 python -m src.ingestion.openaq_publisher
@@ -543,7 +593,7 @@ python -m src.beam.openaq_streaming_dataflow
 ```cmd
 cd dbt
 dbt debug --profiles-dir .
-dbt run --profiles-dir .
+dbt run --profiles-dir . (jika terjadi masalah KeyError: 'dbt_bigquery://macros\adapters.sql', gunakan command rmdir /s /q target )
 dbt test --profiles-dir .
 ```
 
@@ -601,6 +651,9 @@ Jika menggunakan SimpleAuthManager dan password dibuat oleh container, password 
 ```cmd
 docker compose -f docker-compose.airflow.yml logs airflow-webserver | findstr /i "Password for user"
 ```
+
+command untuk melihat password yang tergenerate
+docker compose exec airflow-webserver cat /opt/airflow/simple_auth_manager_passwords.json.generated
 
 ---
 
@@ -821,22 +874,5 @@ Pengembangan yang dapat dilakukan:
 
 ---
 
-## 20. Alur Presentasi Mentor
-
-Urutan penjelasan yang disarankan:
-
-1. jelaskan permasalahan bisnis;
-2. jelaskan empat sumber data;
-3. jelaskan perbedaan batch dan streaming;
-4. jelaskan GCS sebagai data lake;
-5. jelaskan Pub/Sub dan Dataflow pada jalur OpenAQ;
-6. jelaskan BigQuery sebagai analytical warehouse;
-7. jelaskan dbt sebagai business transformation layer;
-8. jelaskan formula risk score;
-9. demonstrasikan data BMKG;
-10. demonstrasikan event OpenAQ;
-11. demonstrasikan hasil BigQuery Gold;
-12. tampilkan dashboard Looker Studio;
-13. demonstrasikan failure alert Gmail;
-14. tampilkan hasil `dbt test`;
-15. jelaskan keterbatasan dan pengembangan berikutnya.
+Onlooker Dashboard
+https://datastudio.google.com/s/lTpWMeZhnvU
